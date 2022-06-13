@@ -3,11 +3,15 @@ module App
 open Browser.Dom
 open Browser.Types
 
+let mutable loggingEnabled = false
+let mutable loggingCount = 0
+
 type Stick = {
         P1 : int
         P2 : int
         Length : float
         Visible : bool
+        Flexible : bool
     }
 
 type Message =
@@ -16,6 +20,27 @@ type Message =
 
 let distance x1 y1 x2 y2 =
     System.Math.Sqrt( (x2-x1) * (x2-x1) + (y2-y1) * (y2-y1) )
+
+type Vector2( x : float, y : float ) =
+    member __.X = x
+    member __.Y = y
+    member __.LengthSq =
+        (x * x) + (y * y)
+    member __.Length =
+        System.Math.Sqrt((x * x) + (y * y))
+    member __.Normalize() =
+        let len = __.Length
+        Vector2( x / len, y / len )
+    member __.Dot( other : Vector2 ) =
+        x * other.X + y * other.Y
+    static member (+) (a : Vector2, b: Vector2) =
+        Vector2( a.X + b.X, a.Y + b.Y )
+    static member (-) (a : Vector2, b: Vector2) =
+        Vector2( a.X - b.X, a.Y - b.Y )
+    static member (*) (a : Vector2, n : float) =
+        Vector2( a.X * n, a.Y * n )
+    static member (~-) (a : Vector2 ) =
+        Vector2( -a.X, -a.Y )
 
 type Particle = {
         Id : int
@@ -27,10 +52,21 @@ type Particle = {
         Visible : bool
         Gravity: bool
         Vertical : bool
+        Color : string
     }
     with
         member __.Contains( x : float, y : float ) =
             distance x y (__.XPos) (__.YPos) <= 4
+
+        member __.Velocity =
+            Vector2( __.XPos - __.PrevXPos, __.YPos - __.PrevYPos)
+
+        member __.Speed =
+            __.Velocity.Length
+
+        member __.Energy =
+            let v = __.Speed
+            0.5 * v * v
 
         static member Create(
             id : int,
@@ -41,7 +77,8 @@ type Particle = {
             isFixed : bool option,
             isVisible : bool option,
             gravity : bool option,
-            vertical : bool option
+            vertical : bool option,
+            color : string option
             ) =
             {
                 Id = id
@@ -53,6 +90,7 @@ type Particle = {
                 Visible = isVisible |> Option.defaultValue true
                 Gravity = gravity |> Option.defaultValue true
                 Vertical = vertical |> Option.defaultValue false
+                Color = color |> Option.defaultValue "black"
             }
 
 type IdFactory() =
@@ -87,16 +125,16 @@ type Shape =
         { __ with
             Particles = __.Particles.Add( p.Id, p )
         }
-    member __.AddParticle( xpos : float, ypos : float, ?vx : float, ?vy : float, ?isFixed : bool, ?isVisible : bool, ?gravity : bool, ?vertical : bool ) =
-        __.AddParticle(Particle.Create(Shape.ParticleIds.Next(), xpos, ypos, vx, vy, isFixed, isVisible, gravity, vertical))
-    member __.AddStick( id1 : int, id2 : int, len : float, isVisible : bool ) =
+    member __.AddParticle( xpos : float, ypos : float, ?vx : float, ?vy : float, ?isFixed : bool, ?isVisible : bool, ?gravity : bool, ?vertical : bool, ?color : string ) =
+        __.AddParticle(Particle.Create(Shape.ParticleIds.Next(), xpos, ypos, vx, vy, isFixed, isVisible, gravity, vertical, color))
+    member __.AddStick( id1 : int, id2 : int, len : float, isVisible : bool, isFlexible : bool ) =
         { __ with
-            Sticks = __.Sticks @ [ { P1=id1; P2=id2; Length = len; Visible = isVisible } ]
+            Sticks = __.Sticks @ [ { P1=id1; P2=id2; Length = len; Visible = isVisible; Flexible = isFlexible } ]
         }
-    member __.AddStick( id1 : int, id2 : int, ?isVisible : bool ) =
+    member __.AddStick( id1 : int, id2 : int, ?isVisible : bool, ?isFlexible : bool ) =
         let p1,p2 = __.Particles[id1], __.Particles[id2]
         let len = distance (p1.XPos) (p1.YPos) (p2.XPos) (p2.YPos)
-        __.AddStick( id1, id2, len, isVisible |> Option.defaultValue true )
+        __.AddStick( id1, id2, len, isVisible |> Option.defaultValue true, isFlexible |> Option.defaultValue false )
     member __.GetParticle (id:int) =
         __.Particles[id]
 
@@ -110,6 +148,31 @@ type Model =
     member __.ReplaceShape (s : Shape) =
         { __ with
             Shapes = __.Shapes |> List.map (fun x -> if x.Id = s.Id then s else x ) }
+    member __.AllParticles =
+        __.Shapes |> List.collect (fun s -> s.Particles.Values |> Seq.toList)
+
+    member __.Energy =
+        __.AllParticles |> List.sumBy (fun p -> p.Energy)
+
+let rnd (min:float) (max:float) =
+    min + (max - min) * Fable.Core.JS.Math.random()
+
+let rndColor() =
+    $"hsla({rnd 0.0 360.0} 50% 50% / 1.0)"
+
+let oddNeg (n) =
+    (2 * (n % 2)) - 1
+
+let makeParticles (n:int) =
+    let rp (s:Shape) (i : int) =
+        let x = rnd 10.0 300.00 //300.0 - 50.0 * (float i)
+        let y = rnd 10.0 200.0 //100.0 + (float i * 4.0)
+        let vx = rnd -2.0 8.0 // float (oddNeg i) * -8.0// rnd 1.0 4.0
+        let vy = rnd -2.0 8.0 // 0.0 // rnd -1.0 1.0
+        s.AddParticle( x, y, vx, vy, false, true, false, false, rndColor() )
+
+    let shape = Shape.Empty
+    [1..n] |> List.fold rp shape
 
 let makeBox (posx : float) (posy:float) (size : float) (vx : float) (vy : float) =
     let shape = Shape.Empty
@@ -129,6 +192,7 @@ let makeBox (posx : float) (posy:float) (size : float) (vx : float) (vy : float)
         .AddStick( firstId + 2, firstId + 3 )
         .AddStick( firstId + 3, firstId + 0 )
         .AddStick( firstId + 0, firstId + 2, false )
+        .AddStick( firstId + 1, firstId + 3, false )
 
 type ChainFixing =
     | NoFixings
@@ -150,8 +214,8 @@ let addChain (x1:float) (y1:float) (x2:float) (y2:float) (len:float) (numLinks:i
         s.AddParticle(
             x1 + (float n) * dx, y1 + (float n) * dy,
             0.0, 0.0,
-            isFixed, true, false, isFixed
-        ).AddStick( id0 + n-1, id0 + n, stickLen, true )
+            isFixed, true, true, false
+        ).AddStick( id0 + n-1, id0 + n, stickLen, true, true )
 
     let addLinks (shape : Shape) =
         [1..numLinks]
@@ -160,7 +224,7 @@ let addChain (x1:float) (y1:float) (x2:float) (y2:float) (len:float) (numLinks:i
     let fixFirst = fixing <> NoFixings
 
     shape
-        .AddParticle( x1, y1, 0.0, 0.0, fixFirst, true, false, true )
+        .AddParticle( x1, y1, 0.0, 0.0, fixFirst, true, true, false )
         |> addLinks
 
 let makeChain (x1:float) (y1:float) (x2:float) (y2:float) (len:float) (numLinks:int) =
@@ -174,7 +238,7 @@ let makeNet (x1:float) (y1:float) (x2:float) (y2:float) (len:float) (numLinks:in
             n + Shape.ParticleIds.PeekNext() - (numLinks+1),
             n + Shape.ParticleIds.PeekNext() - (numLinks+1) * 2,
             dh,
-            true )
+            true, true )
 
     let addVerts shape =
         [0..numLinks]
@@ -198,12 +262,18 @@ let init (cvs : HTMLCanvasElement) () =
         Shapes = [
             makeBox 100.0 100.00 50.0 8.0 0.0
             makeBox 200.0 100.00 50.0 0.0 -4.0
+            makeParticles 32
             //makeChain 50.0 10.0 350.0 10.0 300 8
-            makeNet 5.0 100.0 1195.0 100.0 1190 64 200 1
+            //makeNet 5.0 10.0 195.0 10.0 250 16 100 4
         ]
     }
 
 let initEventHandlers (cvs : HTMLCanvasElement) (model : unit -> Model) (dispatch: Message -> unit) =
+    let loggingB = document.querySelector("#logging") :?> HTMLButtonElement
+
+    loggingB.onclick <- fun e ->
+        loggingEnabled <- not loggingEnabled
+
     cvs.onmousedown <- fun e ->
         let p =
             model().Shapes
@@ -225,7 +295,7 @@ let initEventHandlers (cvs : HTMLCanvasElement) (model : unit -> Model) (dispatc
     cvs.onmouseup <- fun e ->
         dispatch (Pinned (-1,0.0,0.0))
 
-let view (cvs : HTMLCanvasElement) ( m : Model ) =
+let view (en : HTMLDivElement) (cvs : HTMLCanvasElement) ( m : Model ) =
     let ctx = cvs.getContext_2d()
     let pinnedId,_,_ = m.Pinned
 
@@ -242,7 +312,7 @@ let view (cvs : HTMLCanvasElement) ( m : Model ) =
                 if pinnedId = p.Id then
                     Fable.Core.U3.Case1 "red"
                 else
-                    Fable.Core.U3.Case1 "black"
+                    Fable.Core.U3.Case1 p.Color
             ctx.arc(p.XPos, p.YPos, 4.0, 0.0, System.Math.PI * 2.0)
             ctx.fill()
 
@@ -256,13 +326,15 @@ let view (cvs : HTMLCanvasElement) ( m : Model ) =
             ctx.lineTo( p2.XPos, p2.YPos )
         ctx.stroke()
 
+    let totalE = m.Energy
+    en.innerText <- string totalE
 
 let updateFrame (cvs : HTMLCanvasElement) ( m : Model ) =
     let w = cvs.width
     let h = cvs.height
-    let friction = 0.99
+    let friction = 1.0 //0.999
     let gravity = 0.5
-    let bounce = 0.9
+    let bounce = 1.0 // 0.999
 
     let updatePosition (p : Particle) =
         let vx = friction * (p.XPos - p.PrevXPos)
@@ -281,7 +353,7 @@ let updateFrame (cvs : HTMLCanvasElement) ( m : Model ) =
         else
             p.Id, updatePosition p
 
-    let constrainParticle p =
+    let bounceParticle p =
         let mutable px = p.PrevXPos
         let mutable py = p.PrevYPos
 
@@ -336,7 +408,7 @@ let updateFrame (cvs : HTMLCanvasElement) ( m : Model ) =
         let e = (d - stick.Length) / d / 2.0
 
         let p1' =
-            if p1.Fixed then p1 else
+            if p1.Fixed || (stick.Flexible && e < 0) then p1 else
             {
                 p1 with
                     XPos = if (p1.Vertical) then p1.XPos else p1.XPos + (dx * e)
@@ -344,7 +416,7 @@ let updateFrame (cvs : HTMLCanvasElement) ( m : Model ) =
             }
 
         let p2' =
-            if p2.Fixed then p2 else
+            if p2.Fixed || (stick.Flexible && e < 0) then p2 else
             {
                 p2 with
                     XPos = if (p2.Vertical) then p2.XPos else p2.XPos - (dx * e)
@@ -360,17 +432,98 @@ let updateFrame (cvs : HTMLCanvasElement) ( m : Model ) =
         |> Seq.map updateParticle
         |> Map.ofSeq
 
-    let constrainParticles (particles : Map<int,Particle>) =
+    let bounceParticles (particles : Map<int,Particle>) =
         particles.Values
-        |> Seq.map constrainParticle
+        |> Seq.map bounceParticle
         |> Map.ofSeq
 
     let updateSticks sticks particles =
         sticks |> List.fold updateStick particles
 
+    // [ 1; 2; 3 ]
+    // [ 1,2; 1,3; 2,3 ]
+    let comb(list : 'T list) : ('T*'T) list =
+        let rec comb' results list =
+            match list with
+            | [] -> results
+            | x::xs -> (xs |> List.map (fun x' -> x,x')) @ comb' results xs
+        comb' [] list
+
+    //  (p1) ---->  <---- (p2)
+    //   (n) <----
+    let collideP1 (e: float) (p1:Particle) (p2:Particle) =
+        let dx = p2.XPos - p1.XPos
+        let dy = p2.YPos - p1.YPos
+
+        let c = Vector2( p1.XPos + (dx * e), p1.YPos + (dy * e) )
+
+        // Reflection normal for p1
+        let n = - (Vector2(dx,dy).Normalize()) // From p2 to p1
+
+        let v2 = Vector2( p2.XPos - p2.PrevXPos, p2.YPos - p2.PrevYPos )
+        let v2_speed_contrib = v2.Dot(n);
+
+        let v1 = Vector2( p1.XPos - p1.PrevXPos, p1.YPos - p1.PrevYPos )
+        let v1_speed_contrib = v1.Dot(n);
+
+        // Cnrrent position
+        let prev =
+                let v2n = n * v2_speed_contrib
+                let v1n = n * v1_speed_contrib
+                let v1' = v1 + v2n - v1n
+                c - v1' // prev
+
+        if loggingEnabled then
+            //loggingCount <- loggingCount + 1
+            if loggingCount > 1 then
+                loggingEnabled <- false
+
+            console.log("-----")
+            console.log("dx", dx)
+            console.log("dy", dy)
+            console.log("n", n)
+            console.log("v2", v2)
+            console.log("v2_speed_contrib", v2_speed_contrib)
+            console.log("c",c)
+            console.log("prev",prev)
+        {
+            p1 with
+                XPos = c.X
+                YPos = c.Y
+                PrevXPos = prev.X
+                PrevYPos = prev.Y
+            }
+
+    let collidePair (particles : Map<int,Particle>) ((p1,p2) : Particle * Particle) =
+        let dx = p2.XPos - p1.XPos
+        let dy = p2.YPos - p1.YPos
+        let d = System.Math.Sqrt( dx*dx + dy*dy )
+        let len = 8.0
+        let e = (d - len) / d / 2.0
+
+        if d > len then
+            particles
+        else
+
+            let p1' = collideP1 e p1 p2
+            let p2' = collideP1 e p2 p1
+
+            particles
+                .Add( p1.Id, p1')
+                .Add( p2.Id, p2')
+
+    let collideParticles (particles : Map<int,Particle>) =
+        let pairs = particles.Values |> Seq.toList |> comb
+
+        pairs |> List.fold collidePair particles
+
     let applyConstraints (n : int) sticks particles =
         let applyC p =
-            p |> updateSticks sticks |> constrainParticles
+            p
+            |> updateSticks sticks
+            |> bounceParticles
+            |> collideParticles
+
         [1..n] |> List.fold (fun p _ -> applyC p) particles
 
     let updateShape shape =
@@ -378,7 +531,7 @@ let updateFrame (cvs : HTMLCanvasElement) ( m : Model ) =
             Particles =
                 shape.Particles
                 |> updateParticles
-                |> applyConstraints 100 (shape.Sticks)
+                |> applyConstraints 50 (shape.Sticks)
         }
 
     {  m with
@@ -425,10 +578,11 @@ let runGameLoop<'Model,'Msg> (init : unit -> 'Model) (update: 'Msg -> 'Model -> 
 
     (fun () -> model), dispatch, (fun () -> rafu main)
 
-
 let run cvs =
-    let model, dispatch, run = runGameLoop (init cvs) (update cvs) (view cvs) Frame
+    let energy = document.querySelector("#energy") :?> HTMLDivElement
+    let model, dispatch, run = runGameLoop (init cvs) (update cvs) (view energy cvs) Frame
     initEventHandlers cvs model dispatch
     run()
+
 
 run (document.querySelector("canvas") :?> HTMLCanvasElement)

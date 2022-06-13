@@ -6,16 +6,30 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="shortcut icon" href="fable.ico" />
   <style>
+      * {
+          font-family:Arial, Helvetica, sans-serif;
+      }
 canvas {
-    width: 1200px;
+    width: 400px;
     height: 300px;
     background-color: white;
     border: 1px solid gray;
+}
+.tools {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.5rem;
 }
   </style>
 </head>
 <body>
     <canvas></canvas>
+    <div class="tools">
+        <button id="logging">Logging</button>
+        <label for="energy">Energy:</label>
+        <div id="energy">0</div>
+    </div>
     <script src="bundle.js"></script>
 </body>
 </html>
